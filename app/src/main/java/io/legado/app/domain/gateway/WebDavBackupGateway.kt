@@ -9,6 +9,7 @@ interface WebDavBackupGateway {
     suspend fun test(): Boolean
     suspend fun backup()
     suspend fun getBackupNames(): List<String>
+    suspend fun getBackups(): List<WebDavBackup>
     suspend fun getLatestBackup(): WebDavBackup?
     suspend fun restore(name: String)
 }

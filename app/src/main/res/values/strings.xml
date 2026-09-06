@@ -2313,13 +2313,16 @@
     <string name="home_set_reading_goal">Set Reading Goal</string>
     <string name="home_goal_minutes_label">Goal (minutes)</string>
     <string name="home_webdav_backup">WebDAV Backup</string>
+    <string name="home_restore_select_backup">Select a backup to restore</string>
     <string name="home_latest_backup_value">Latest backup: %1$s</string>
+    <string name="home_backup_count_and_latest_value">%1$d backups · latest: %2$s</string>
     <string name="home_no_webdav_backup">No WebDAV backup found</string>
     <string name="home_loading_webdav_backup">Loading backup information…</string>
     <string name="home_webdav_backup_load_error">Couldn\'t load backup information</string>
     <string name="home_webdav_backup_confirmation">Back up current data to WebDAV now?</string>
     <string name="home_webdav_restore_confirmation">Restore WebDAV backup %1$s? Current data may be overwritten.</string>
     <string name="homepage_no_source_sets_selected">No source sets selected</string>
+    <string name="home_source_set_feed">Source Sets</string>
     <string name="homepage_add_module_definition">Please add homepage module definitions in the book source</string>
     <string name="homepage_collapse">Collapse</string>
     <string name="homepage_show_all">Show All</string>

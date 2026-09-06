@@ -124,6 +124,7 @@ import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.sendToClip
 import io.legado.app.utils.takePersistablePermissionSafely
 import io.legado.app.utils.toastOnUi
+import kotlinx.collections.immutable.ImmutableList
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -480,6 +481,7 @@ fun HomeScreen(
             isRefreshing = homepageState.isRefreshing,
             onRefresh = onRefreshHomepage,
             modifier = Modifier.fillMaxSize(),
+            topPadding = paddingValues.calculateTopPadding(),
             scrollBehavior = scrollBehavior,
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -537,50 +539,52 @@ fun HomeScreen(
                         )
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(viewportHeight),
-                    ) {
-                        if (selectedSets.isEmpty()) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                AppText(stringResource(R.string.homepage_no_source_sets_selected))
-                            }
-                        } else {
-                            HorizontalPager(
-                                state = pagerState,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f)
-                                    .nestedScroll(moduleNestedScrollConnection),
-                                key = { index ->
-                                    selectedSets.getOrNull(index)?.sourceUrl ?: index
-                                },
-                            ) { pageIndex ->
-                                val source = selectedSets.getOrNull(pageIndex)
-                                val sourceModules = remember(homepageState.modules, source) {
-                                    homepageState.modules.filter { module ->
-                                        if (source?.isCustomSet == true) {
-                                            val setId =
-                                                HomepageViewModel.customSetIdFromUrl(source.sourceUrl)
-                                            module.customSetId == setId
-                                        } else {
-                                            module.sourceUrl == source?.sourceUrl
+                    if (HomeDashboardSection.SourceSetFeed in state.visibleSections) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(viewportHeight),
+                        ) {
+                            if (selectedSets.isEmpty()) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    AppText(stringResource(R.string.homepage_no_source_sets_selected))
+                                }
+                            } else {
+                                HorizontalPager(
+                                    state = pagerState,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                        .nestedScroll(moduleNestedScrollConnection),
+                                    key = { index ->
+                                        selectedSets.getOrNull(index)?.sourceUrl ?: index
+                                    },
+                                ) { pageIndex ->
+                                    val source = selectedSets.getOrNull(pageIndex)
+                                    val sourceModules = remember(homepageState.modules, source) {
+                                        homepageState.modules.filter { module ->
+                                            if (source?.isCustomSet == true) {
+                                                val setId =
+                                                    HomepageViewModel.customSetIdFromUrl(source.sourceUrl)
+                                                module.customSetId == setId
+                                            } else {
+                                                module.sourceUrl == source?.sourceUrl
+                                            }
                                         }
                                     }
+                                    HomepageModuleFeed(
+                                        modules = sourceModules,
+                                        actions = homepageFeedActions,
+                                        modifier = Modifier.fillMaxSize(),
+                                        sharedTransitionScope = sharedTransitionScope,
+                                        animatedVisibilityScope = animatedVisibilityScope,
+                                        onBookLongClick = onHomepageBookLongClick,
+                                        onErrorClick = { errorMessage = it },
+                                    )
                                 }
-                                HomepageModuleFeed(
-                                    modules = sourceModules,
-                                    actions = homepageFeedActions,
-                                    modifier = Modifier.fillMaxSize(),
-                                    sharedTransitionScope = sharedTransitionScope,
-                                    animatedVisibilityScope = animatedVisibilityScope,
-                                    onBookLongClick = onHomepageBookLongClick,
-                                    onErrorClick = { errorMessage = it },
-                                )
                             }
                         }
                     }
@@ -603,6 +607,7 @@ fun HomeScreen(
         HomeSheets(
             sheet = state.activeSheet,
             visibleSections = state.visibleSections,
+            backups = state.backups,
             onIntent = onIntent,
         )
         AppAlertDialog(
@@ -705,6 +710,7 @@ private fun HomeDashboardContent(
         if (HomeDashboardSection.WebDavBackup in state.visibleSections) {
             WebDavBackupCard(
                 latestBackup = state.latestBackup,
+                backupCount = state.backups.size,
                 isLoading = state.isBackupLoading,
                 isLoadError = state.isBackupLoadError,
                 isActionRunning = state.isBackupActionRunning,
@@ -1159,6 +1165,7 @@ private fun SemiCircleProgress(
 @Composable
 private fun WebDavBackupCard(
     latestBackup: HomeBackupUi?,
+    backupCount: Int,
     isLoading: Boolean,
     isLoadError: Boolean,
     isActionRunning: Boolean,
@@ -1169,14 +1176,14 @@ private fun WebDavBackupCard(
 ) {
     val lastBackupText = when {
         isLoading -> stringResource(R.string.home_loading_webdav_backup)
-        latestBackup != null -> {
-            val date = remember(latestBackup.lastModify) {
+        backupCount > 0 -> {
+            val date = remember(latestBackup?.lastModify) {
                 DateFormat.getDateTimeInstance(
                     DateFormat.MEDIUM,
                     DateFormat.SHORT,
-                ).format(Date(latestBackup.lastModify))
+                ).format(Date(latestBackup?.lastModify ?: 0L))
             }
-            stringResource(R.string.home_latest_backup_value, date)
+            stringResource(R.string.home_backup_count_and_latest_value, backupCount, date)
         }
 
         isLoadError -> stringResource(R.string.home_webdav_backup_load_error)
@@ -1352,6 +1359,7 @@ private fun HomeDialogs(
 private fun HomeSheets(
     sheet: HomeSheet?,
     visibleSections: Set<HomeDashboardSection>,
+    backups: ImmutableList<HomeBackupUi>,
     onIntent: (HomeIntent) -> Unit,
 ) {
     HomeDashboardSettingsSheet(
@@ -1387,6 +1395,77 @@ private fun HomeSheets(
         onRestoreFromLocal = { onIntent(HomeIntent.RestoreFromLocal) },
         onRestoreFromNetwork = { onIntent(HomeIntent.RestoreFromNetwork) },
     )
+    RestoreBackupListSheet(
+        show = sheet is HomeSheet.RestoreBackupList,
+        backups = backups,
+        onDismissRequest = { onIntent(HomeIntent.DismissSheet) },
+        onSelect = { name -> onIntent(HomeIntent.RestoreSelectBackup(name)) },
+    )
+}
+
+@Composable
+private fun RestoreBackupListSheet(
+    show: Boolean,
+    backups: ImmutableList<HomeBackupUi>,
+    onDismissRequest: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    AppModalBottomSheet(
+        show = show,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.home_restore_select_backup),
+    ) {
+        if (backups.isEmpty()) {
+            AppText(
+                text = stringResource(R.string.home_loading_webdav_backup),
+                style = LegadoTheme.typography.bodyMedium,
+                color = LegadoTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+        } else {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                for (backup in backups) {
+                    val dateText = remember(backup.lastModify) {
+                        DateFormat.getDateTimeInstance(
+                            DateFormat.MEDIUM,
+                            DateFormat.SHORT,
+                        ).format(Date(backup.lastModify))
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(backup.name) }
+                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        AppIcon(
+                            imageVector = Icons.Default.CloudDownload,
+                            contentDescription = null,
+                            tint = LegadoTheme.colorScheme.primary,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            AppText(
+                                text = backup.name,
+                                style = LegadoTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            AppText(
+                                text = dateText,
+                                style = LegadoTheme.typography.bodySmall,
+                                color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
 }
 
 @Composable
@@ -1413,6 +1492,7 @@ private fun HomeDashboardSection.labelRes(): Int = when (this) {
     HomeDashboardSection.RecentBooks -> R.string.home_recent_books
     HomeDashboardSection.DailyGoal -> R.string.home_today_reading_goal
     HomeDashboardSection.WebDavBackup -> R.string.home_webdav_backup
+    HomeDashboardSection.SourceSetFeed -> R.string.home_source_set_feed
 }
 
 private fun bookAccessibilityLabel(

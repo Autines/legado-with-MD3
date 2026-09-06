@@ -74,6 +74,7 @@ class HomeViewModel(
             selectedSourceSetUrl = selectedSourceUrl,
             visibleSections = visibleSections.toImmutableSet(),
             latestBackup = backup.latest?.toUi(),
+            backups = backup.all.map { it.toUi() }.toImmutableList(),
             isBackupLoading = backup.isLoading,
             isBackupLoadError = backup.isLoadError,
             isBackupActionRunning = backup.isActionRunning,
@@ -142,11 +143,19 @@ class HomeViewModel(
 
             HomeIntent.RestoreFromNetwork -> {
                 _activeSheet.value = null
-                requestRestore()
+                showBackupList()
+            }
+
+            is HomeIntent.RestoreSelectBackup -> {
+                _activeSheet.value = null
+                _activeDialog.value = HomeDialog.ConfirmRestore(intent.name)
             }
 
             is HomeIntent.RestoreLocalFileSelected -> restoreLocal(intent.uri)
-            HomeIntent.ConfirmRestore -> restore()
+            HomeIntent.ConfirmRestore -> {
+                val name = (_activeDialog.value as? HomeDialog.ConfirmRestore)?.backupName
+                if (name != null) restore(name)
+            }
             HomeIntent.BackupSettingsClick -> {
                 _effects.tryEmit(HomeEffect.OpenBackupSettings)
             }
@@ -195,21 +204,22 @@ class HomeViewModel(
         }
     }
 
-    private fun requestRestore() {
-        val backup = _backupState.value.latest
-        if (backup == null) {
-            _effects.tryEmit(
-                HomeEffect.ShowMessage(
-                    if (_backupState.value.isLoadError) {
-                        R.string.home_webdav_backup_load_error
-                    } else {
-                        R.string.home_no_webdav_backup
-                    }
-                )
-            )
-            return
+    private fun showBackupList() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                webDavBackupUseCase.getBackups()
+            }.onSuccess { all ->
+                if (all.isEmpty()) {
+                    _effects.tryEmit(HomeEffect.ShowMessage(R.string.home_no_webdav_backup))
+                } else {
+                    _backupState.update { it.copy(all = all) }
+                    _activeSheet.value = HomeSheet.RestoreBackupList
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                _effects.tryEmit(HomeEffect.ShowMessage(R.string.home_webdav_backup_load_error))
+            }
         }
-        _activeDialog.value = HomeDialog.ConfirmRestore(backup.name)
     }
 
     private fun requestBackup(destination: HomeBackupDestination) {
@@ -298,15 +308,14 @@ class HomeViewModel(
         }
     }
 
-    private fun restore() {
-        val backup = _backupState.value.latest ?: return
+    private fun restore(name: String) {
         _activeDialog.value = null
         if (!backupActionMutex.tryLock()) return
         _backupState.update { it.copy(isActionRunning = true) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 runCatching {
-                    webDavBackupUseCase.restore(backup.name)
+                    webDavBackupUseCase.restore(name)
                 }.onSuccess {
                     _effects.emit(HomeEffect.ShowMessage(R.string.restore_success))
                 }.onFailure { error ->
@@ -340,10 +349,11 @@ class HomeViewModel(
             )
         }
         try {
-            val latest = webDavBackupUseCase.getLatestBackup()
+            val all = webDavBackupUseCase.getBackups()
             _backupState.update {
                 it.copy(
-                    latest = latest,
+                    latest = all.firstOrNull(),
+                    all = all,
                     isLoading = false,
                     isLoadError = false,
                 )
@@ -362,6 +372,7 @@ class HomeViewModel(
 
     private data class HomeBackupState(
         val latest: WebDavBackup? = null,
+        val all: List<WebDavBackup> = emptyList(),
         val isLoading: Boolean = true,
         val isLoadError: Boolean = false,
         val isActionRunning: Boolean = false,

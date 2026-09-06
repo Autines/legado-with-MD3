@@ -24,7 +24,8 @@ enum class HomeDashboardSection(val storageValue: String) {
     TotalReadTime("total_read_time"),
     RecentBooks("recent_books"),
     DailyGoal("daily_goal"),
-    WebDavBackup("webdav_backup");
+    WebDavBackup("webdav_backup"),
+    SourceSetFeed("source_set_feed");
 
     companion object {
         fun fromStorage(value: String): Set<HomeDashboardSection> {

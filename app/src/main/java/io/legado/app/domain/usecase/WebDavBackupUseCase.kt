@@ -34,6 +34,11 @@ class WebDavBackupUseCase(
         return webDavBackupGateway.getLatestBackup()
     }
 
+    suspend fun getBackups(): List<WebDavBackup> {
+        webDavBackupGateway.syncConfig()
+        return webDavBackupGateway.getBackups()
+    }
+
     suspend fun restore(name: String) {
         webDavBackupGateway.syncConfig()
         webDavBackupGateway.restore(name)

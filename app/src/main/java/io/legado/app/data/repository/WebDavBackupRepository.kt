@@ -37,6 +37,12 @@ class WebDavBackupRepository : WebDavBackupGateway {
         }
     }
 
+    override suspend fun getBackups(): List<WebDavBackup> {
+        return withContext(IO) {
+            AppWebDav.getBackups()
+        }
+    }
+
     override suspend fun getLatestBackup(): WebDavBackup? {
         return withContext(IO) {
             AppWebDav.lastBackUp().getOrThrow()?.let {

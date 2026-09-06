@@ -2058,13 +2058,16 @@
     <string name="home_set_reading_goal">设定阅读目标</string>
     <string name="home_goal_minutes_label">目标（分钟）</string>
     <string name="home_webdav_backup">WebDAV 备份</string>
+    <string name="home_restore_select_backup">选择要恢复的备份</string>
     <string name="home_latest_backup_value">最近备份：%1$s</string>
+    <string name="home_backup_count_and_latest_value">共 %1$d 个备份 · 最近一次：%2$s</string>
     <string name="home_no_webdav_backup">暂无 WebDAV 备份</string>
     <string name="home_loading_webdav_backup">正在获取备份信息…</string>
     <string name="home_webdav_backup_load_error">无法获取备份信息</string>
     <string name="home_webdav_backup_confirmation">立即将当前数据备份到 WebDAV？</string>
     <string name="home_webdav_restore_confirmation">恢复 WebDAV 备份 %1$s？当前数据可能被覆盖。</string>
     <string name="homepage_no_source_sets_selected">未选择任何书源集</string>
+    <string name="home_source_set_feed">书源集</string>
     <string name="homepage_add_module_definition">请在书源中添加首页模块定义</string>
     <string name="homepage_collapse">收起</string>
     <string name="homepage_show_all">显示全部</string>

@@ -8,6 +8,7 @@ import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.model.WebDavBackup
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
@@ -134,6 +135,19 @@ object AppWebDav {
             }
         } ?: throw NoStackTraceException("webDav没有配置")
         return names
+    }
+
+    /**
+     * 列出 WebDAV 上全部备份文件，按文件名（含时间戳）倒序，最新的在最前。
+     * authorization 未配置时返回空列表（与“无备份”语义一致），不抛异常。
+     */
+    suspend fun getBackups(): List<WebDavBackup> {
+        val authorization = authorization ?: return emptyList()
+        val files = WebDav(rootWebDavUrl, authorization).listFiles()
+        return files
+            .filter { it.displayName.startsWith("backup") }
+            .sortedByDescending { it.lastModify }
+            .map { WebDavBackup(name = it.displayName, lastModify = it.lastModify) }
     }
 
     @Throws(WebDavException::class)

@@ -23,6 +23,7 @@ data class HomeUiState(
     val visibleSections: ImmutableSet<HomeDashboardSection> =
         DEFAULT_HOME_DASHBOARD_SECTIONS.toImmutableSet(),
     val latestBackup: HomeBackupUi? = null,
+    val backups: ImmutableList<HomeBackupUi> = persistentListOf(),
     val isBackupLoading: Boolean = true,
     val isBackupLoadError: Boolean = false,
     val isBackupActionRunning: Boolean = false,
@@ -68,6 +69,7 @@ sealed interface HomeIntent {
     data object RestoreClick : HomeIntent
     data object RestoreFromLocal : HomeIntent
     data object RestoreFromNetwork : HomeIntent
+    data class RestoreSelectBackup(val name: String) : HomeIntent
     data class RestoreLocalFileSelected(val uri: String) : HomeIntent
     data object ConfirmRestore : HomeIntent
     data object BackupSettingsClick : HomeIntent
@@ -106,6 +108,7 @@ sealed interface HomeSheet {
     data object DashboardSettings : HomeSheet
     data object BackupOptions : HomeSheet
     data object RestoreOptions : HomeSheet
+    data object RestoreBackupList : HomeSheet
 }
 
 enum class HomeBackupDestination(val mode: String) {

@@ -21,3 +21,16 @@ node_modules/
 /.debug-runs/
 __pycache__/
 *.py[cod]
+
+# Release signing credentials (NEVER commit these)
+legado-release.jks
+legado-release.password.txt
+*.jks
+*.keystore
+keystore.properties
+
+# Local development artifacts (untracked, not for commit)
+DEVELOPMENT_GUIDE.md
+build.bat
+gradle.bat
+jdk21/

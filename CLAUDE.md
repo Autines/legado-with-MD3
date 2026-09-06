@@ -70,6 +70,14 @@ Transform tasks into verifiable goals:
 
 The project uses JDK 21 for development (set in `build.gradle.kts` via `jvmToolchain`). CI uses JDK 17 for building.
 
+本机注意（Windows）：系统默认 `java` 是 1.8，AGP 9 要求 JDK 21，直接跑 `./gradlew` 会失败或行为异常。编译前显式指定项目自带 JDK：
+
+```bash
+JAVA_HOME="<project>/jdk21/jdk-21.0.2+13" PATH="<project>/jdk21/jdk-21.0.2+13/bin:$PATH" ./gradlew assembleAppDebug
+```
+
+另外本机项目在 D 盘、Gradle 缓存在 C 盘，KSP 会因跨盘符报 `this and base files have different roots`。遇到该错误时把项目复制到 C 盘再编译（已有一份 `C:\legado-build`，增量编译约 1-2 分钟），不要去改 KSP 配置。
+
 Gradle properties: 8 GB heap, configuration cache disabled (`gradle.properties:31`), non-transitive R classes, precise resource shrinking enabled.
 
 ## Architecture
@@ -367,6 +375,7 @@ Book sources, RSS sources, and HTTP TTS use JavaScript rules. `initRhino()` in `
 
 ## Important Constraints
 
+- **构建配置是禁改区，禁止通过"降级"来解决编译错误。** 不得修改 `gradle/libs.versions.toml`（AGP 9.2.1）、`gradle/wrapper/gradle-wrapper.properties`（Gradle 9.6.1），也不得改任何 `build.gradle.kts` 里的 `compileSdk` / `targetSdk`（均为 37）和 `jvmToolchain`。依赖库要求的 compileSdk/AGP 下限高于当前配置时，**正确做法是升级配置，不是把依赖或 SDK 降回去**。降级会立刻引发上百个 AAR metadata 不兼容错误。编译失败先跑 `git diff -- gradle/ **/build.gradle.kts` 自查，别急着改版本。
 - **Do not update jsoup** beyond 1.16.2 — a breaking change in newer versions (see [jsoup#2017](https://github.com/jhy/jsoup/pull/2017)) affects `AnalyzeByJSoup.kt` and the JsoupXpath library
 - Hutool dependency removed — crypto/编码/日期工具已替换为 JCA (`javax.crypto`/`java.security`) 与 `java.time`，新增内部工具在 `help/crypto/CryptoUtils.kt`
 - Package name discrepancy: code namespace is `io.legado.app` but `applicationId` is `io.legato.kazusa`

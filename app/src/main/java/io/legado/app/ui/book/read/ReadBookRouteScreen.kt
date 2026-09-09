@@ -42,6 +42,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -100,7 +101,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -351,12 +351,13 @@ fun ReadBookRouteScreen(
 
     // ── Effect collection: route handles launcher effects, rest goes to bridge ──
 
-    LaunchedEffect(viewModel) {
-        launch {
+    LaunchedEffect(viewModel, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.effects
                 .onSubscription {
-                    effectsReady.complete(Unit)
-                    onEffectsReady()
+                    if (effectsReady.complete(Unit)) {
+                        onEffectsReady()
+                    }
                 }
                 .collect { effect ->
                     try {
@@ -587,14 +588,18 @@ fun ReadBookRouteScreen(
         }
     }
 
+    val fallbackReaderSurfaceColor = if (isDarkTheme) Color.Black else Color.White
     val readerSurfaceColor = Color(
-        readerBackground.meanColorArgb.takeIf { it != 0 } ?: runCatching {
-            android.graphics.Color.parseColor(
-                if (isDarkTheme) state.styleConfig.bgStrNight else state.styleConfig.bgStr
-            )
-        }.getOrDefault(
-            if (isDarkTheme) android.graphics.Color.BLACK else android.graphics.Color.WHITE
-        )
+        readerBackground.meanColorArgb.takeIf { it != 0 } ?: when {
+            // Before the route has a book, styleConfig only contains construction defaults.
+            // Keep the first opaque reader frame neutral instead of exposing an app-theme tint.
+            state.book == null -> fallbackReaderSurfaceColor.toArgb()
+            else -> runCatching {
+                android.graphics.Color.parseColor(
+                    if (isDarkTheme) state.styleConfig.bgStrNight else state.styleConfig.bgStr
+                )
+            }.getOrDefault(fallbackReaderSurfaceColor.toArgb())
+        }
     )
     val readerEntranceSettled = animatedVisibilityScope?.transition?.let { transition ->
         !transition.isRunning &&
@@ -605,7 +610,23 @@ fun ReadBookRouteScreen(
         controller.onReaderEntranceStateChanged(readerEntranceSettled)
         if (readerEntranceSettled) viewModel.onReaderEntranceSettled()
     }
-    val hasReadablePage = readerPageWindow.current != null && state.msg == null
+    // A chapter boundary can publish an empty window for one composition while the controller
+    // swaps a simulated-page turn to its cached/placeholder successor. Keeping the last complete
+    // window for that gap prevents the root reader background from becoming a visible fallback.
+    var lastReadablePageWindow by remember {
+        mutableStateOf<io.legado.app.feature.reader.core.model.ReaderPageWindow?>(
+            null
+        )
+    }
+    LaunchedEffect(readerPageWindow.current?.id, readerPageWindow.current?.layoutRevision) {
+        if (readerPageWindow.current != null) lastReadablePageWindow = readerPageWindow
+    }
+    val displayedReaderPageWindow =
+        readerPageWindow.takeIf { it.current != null } ?: lastReadablePageWindow
+    // A retained page bridges only a transient chapter-window gap. A real pagination failure
+    // must replace it with the retryable error state instead of leaving stale content visible.
+    val hasReadablePage = displayedReaderPageWindow?.current != null &&
+            state.msg == null && readerPaginationError == null
     var readerContentRevealAllowed by remember(sharedCoverKey) {
         mutableStateOf(sharedCoverKey == null || animatedVisibilityScope == null)
     }
@@ -676,7 +697,7 @@ fun ReadBookRouteScreen(
                 exit = fadeOut(animationSpec = tween(450)),
             ) {
                 ReaderCanvasSurface(
-                hostPages = readerPageWindow,
+                    hostPages = displayedReaderPageWindow ?: readerPageWindow,
                 transitionMode = ReaderTransitionMode.fromPageAnim(controller.pageAnim),
                 backgroundColor = readerSurfaceColor,
                 backgroundImage = readerBackground.drawable,
@@ -697,6 +718,7 @@ fun ReadBookRouteScreen(
                     .layerBackdrop(menuBackdrop),
                 onPreviousPage = { controller.completeComposePageTurn(PageDirection.PREV) },
                 onNextPage = { controller.completeComposePageTurn(PageDirection.NEXT) },
+                    onPageBoundaryReached = controller::showComposePageBoundary,
                 onToggleMenu = controller::showComposeActionMenu,
                 onToggleBookmark = { viewModel.onIntent(ReadBookIntent.ToggleBookmark) },
                 swipeToBookmarkEnabled = readPreferences.swipeToAddBookmark,

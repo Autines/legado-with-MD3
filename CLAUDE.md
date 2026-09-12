@@ -377,7 +377,11 @@ Book sources, RSS sources, and HTTP TTS use JavaScript rules. `initRhino()` in `
 
 - **构建配置是禁改区，禁止通过"降级"来解决编译错误。** 不得修改 `gradle/libs.versions.toml`（AGP 9.2.1）、`gradle/wrapper/gradle-wrapper.properties`（Gradle 9.6.1），也不得改任何 `build.gradle.kts` 里的 `compileSdk` / `targetSdk`（均为 37）和 `jvmToolchain`。依赖库要求的 compileSdk/AGP 下限高于当前配置时，**正确做法是升级配置，不是把依赖或 SDK 降回去**。降级会立刻引发上百个 AAR metadata 不兼容错误。编译失败先跑 `git diff -- gradle/ **/build.gradle.kts` 自查，别急着改版本。
 - **Do not update jsoup** beyond 1.16.2 — a breaking change in newer versions (see [jsoup#2017](https://github.com/jhy/jsoup/pull/2017)) affects `AnalyzeByJSoup.kt` and the JsoupXpath library
-- Hutool dependency removed — crypto/编码/日期工具已替换为 JCA (`javax.crypto`/`java.security`) 与 `java.time`，新增内部工具在 `help/crypto/CryptoUtils.kt`
+- Hutool is back on the classpath at 5.8.22 (do not upgrade). Book-source JS calls it via
+  `Packages.cn.hutool.*`; app-internal **base64 decoding** in `help/crypto/CryptoUtils.kt` also
+  routes through `cn.hutool.core.codec.Base64.decode` for lenient input compatibility (Kotlin
+  `kotlin.io.encoding.Base64` is strict about `=` padding). App crypto otherwise uses JCA (
+  `javax.crypto`/`java.security`); new internal tools live in `help/crypto/CryptoUtils.kt`
 - Package name discrepancy: code namespace is `io.legado.app` but `applicationId` is `io.legato.kazusa`
 - Min SDK 26, target SDK 37, compile SDK 37
 - Release builds enable R8 minification + resource shrinking; `noR8` variant disables both for crash debugging

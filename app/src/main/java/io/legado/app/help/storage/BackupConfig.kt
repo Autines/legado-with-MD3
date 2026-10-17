@@ -201,6 +201,8 @@ object BackupConfig {
         PreferKey.hideStatusBar,
         PreferKey.hideNavigationBar,
         PreferKey.autoReadSpeed,
+        PreferKey.readBrightnessMode,
+        PreferKey.readBrightnessControlPosition,
         PreferKey.clickActionTL,
         PreferKey.clickActionTC,
         PreferKey.clickActionTR,
@@ -348,6 +350,9 @@ object BackupConfig {
         PreferKey.bookshelfRefreshingLimit,
         PreferKey.bookshelfShowIntro,
         PreferKey.bookshelfShowTag,
+        PreferKey.bookshelfShowCustomTags,
+        PreferKey.bookshelfShowSourceTags,
+        PreferKey.bookshelfShowWordCount,
         PreferKey.bookshelfShowLatestChapter,
         PreferKey.bookshelfIntroMaxLines
     )

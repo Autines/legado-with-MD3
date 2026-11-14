@@ -8,12 +8,12 @@ on:
         required: true
         default: 'trae/solo-agent-vhkVM3'
       product:
-        description: '产品变体：appCore 无本地引擎，appFull 内置本地 OCR/擦除/气泡检测'
+        description: '产品变体：appCore 基础版无本地引擎，appComic 漫画增强版内置本地 OCR/擦除/气泡检测'
         required: true
         type: choice
         options:
           - appCore
-          - appFull
+          - appComic
         default: appCore
 
 permissions:
@@ -24,13 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PRODUCT: ${{ github.event.inputs.product }}
-      PRODUCT_TAG: "${{ github.event.inputs.product == 'appFull' && 'full' || 'core' }}"
+      PRODUCT_TAG: "${{ github.event.inputs.product == 'appComic' && 'comic' || 'core' }}"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.branch }}
           fetch-depth: 0
+          submodules: true
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -40,6 +41,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare pinned UI forks
+        uses: ./.github/actions/prepare-ui-forks
 
       - name: Clear 18PlusList.txt
         run: |

@@ -41,6 +41,7 @@ import io.legado.app.feature.reader.core.navigation.ReaderPageContext
 import io.legado.app.feature.reader.core.navigation.ReaderPageNavigator
 import io.legado.app.feature.reader.core.navigation.ReaderPartialPagePolicy
 import io.legado.app.feature.reader.core.readaloud.ReaderVisibleTextPosition
+import io.legado.app.domain.model.readaloud.ReadAloudProgress
 import io.legado.app.feature.reader.core.selection.ReaderSearchMatcher
 import io.legado.app.feature.reader.core.selection.ReaderSearchRequest
 import io.legado.app.feature.reader.core.selection.ReaderSelection
@@ -61,12 +62,14 @@ import io.legado.app.feature.reader.platform.ReaderPerfTrace
 import io.legado.app.help.TTS
 import io.legado.app.help.book.isOnLineTxt
 import io.legado.app.help.config.ReadBookConfig
+import io.legado.app.help.config.ReadStyleResolver
 import io.legado.app.help.readaloud.cast.BgmSceneStore
 import io.legado.app.help.storage.Backup
 import io.legado.app.lib.dialogs.SelectItem
 import io.legado.app.model.CacheBook
 import io.legado.app.model.ImageProvider
 import io.legado.app.model.ParagraphBubbleRenderer
+import io.legado.app.model.ParagraphBubbleSource
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.ReadSessionState
@@ -300,6 +303,15 @@ class ReadBookController(
     }
 
     /**
+     * 高亮规则这一轮用哪套颜色：夜间用夜间色，墨水屏是白底、与白天同一套。
+     *
+     * 排版身份与分页任务各取一次都走这里，避免两处各写一遍 `isNightTheme` 推断而算出
+     * 不同的结果（旧页按一套颜色、新页按另一套）。
+     */
+    private fun highlightColorMode(): Boolean =
+        ReadStyleResolver.currentMode() == ReadStyleResolver.ReadStyleMode.Night
+
+    /**
      * Theme-style selection path, mirroring the legacy View's `[1, 2, 5]`: re-fetch the inline
      * images of the current window, then reload the chapter so the new style's colors and page
      * geometry replace the old ones. [replaceReaderImages] publishes the replacement bitmaps
@@ -403,6 +415,8 @@ class ReadBookController(
     val composePageTurns = _composePageTurns.asSharedFlow()
     private val _composeSelectionCancels = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val composeSelectionCancels = _composeSelectionCancels.asSharedFlow()
+    private val _composeSelectionExtensions = MutableSharedFlow<ReaderSelection>(extraBufferCapacity = 1)
+    val composeSelectionExtensions = _composeSelectionExtensions.asSharedFlow()
 
     /** 宿主要求画布建立选区（全文搜索命中），对照旧 View 的"搜索结果即真选区"。 */
     private val _composeSelections = MutableSharedFlow<ReaderSelection>(extraBufferCapacity = 4)
@@ -420,7 +434,7 @@ class ReadBookController(
     private var composeSelection: ReaderSelection? = null
     private var searchSelection: ReaderSelection? = null
     private var pendingSearchNavigation: ReadBookEffect.NavigateToSearchResult? = null
-    private var readAloudPosition: Pair<Int, Int>? = null
+    private var readAloudPosition: ReaderVisibleTextPosition? = null
     private var composeVisibleBodyTextPositionProvider: (() -> ReaderVisibleTextPosition?)? = null
     private var composeImageClickAt = 0L
     private var composeImageDoubleClick = false
@@ -626,11 +640,7 @@ class ReadBookController(
         composeSelectedText = resolvedText
         val requestVersion = ++textMenuRequestVersion
         activity.lifecycleScope.launch {
-            val items = getActionMenuItems().filterNot {
-                selection.includesTitle && it.id in setOf(
-                    R.id.menu_mark, R.id.menu_ai_clean, R.id.menu_ai_rewrite,
-                )
-            }
+            val items = getActionMenuItems().forSelection(selection.includesTitle)
             if (textMenuRequestVersion != requestVersion) return@launch
             _textMenuState.value = TextMenuState(
                 selectedText = resolvedText,
@@ -673,19 +683,18 @@ class ReadBookController(
         is ReaderElement.Rule -> false
     }
 
-    private fun handleComposeLinkClick(rawLink: String) {
-        val book = ReadBook.book ?: return
+    private fun handleComposeLinkClick(rawLink: String): Boolean {
+        val book = ReadBook.book ?: return false
         val link = LocalBookSemanticHtml.resolveReaderLink(rawLink, book.isLocal,
-            ReadBook.readerChapterInputWindow.current?.chapter?.url.orEmpty()) ?: return
+            ReadBook.readerChapterInputWindow.current?.chapter?.url.orEmpty()) ?: return false
         if (LocalBookSemanticHtml.isExternalLink(link)) {
             viewModel.onIntent(
-                ReadBookIntent.ShowDialog(ReadBookDialog.ConfirmOpenExternalUrl(if (link.startsWith("//")) "https:$link" else link))
+                ReadBookIntent.ShowDialog(ReadBookDialog.ConfirmOpenExternalUrl(link))
             )
-            return
-        }
-        if (LocalBookSemanticHtml.classifyLink(link) == LocalBookSemanticHtml.LinkKind.INTERNAL) {
+        } else {
             viewModel.openInternalBookLink(link)
         }
+        return true
     }
 
     fun onComposeReaderElementLongPress(element: ReaderElement, x: Float, y: Float): Boolean {
@@ -747,26 +756,30 @@ class ReadBookController(
         val debounce = now - composeImageClickAt < 300L
         composeImageClickAt = now
         composeImageDoubleClick = if (debounce) !composeImageDoubleClick else false
+        val action = image.action?.takeIf(String::isNotBlank)
         return when (readSettingsGateway.currentSettings.clickImgWay) {
             // 气泡没有磁盘文件，放进大图预览只会是一张错误占位图：有动作就执行动作，否则吞掉点击
             "1" -> if (ParagraphBubbleRenderer.isBubbleSrc(image.source)) {
-                image.action?.takeIf(String::isNotBlank)?.let { clickImg(it, image.source) }
+                action?.let { clickImg(it, image.source) }
                 true
             } else {
                 viewModel.onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.Photo(image.source)))
                 true
             }
-            "2" -> if (!debounce && ReadBook.book?.isOnLineTxt == true) {
-                image.action?.takeIf(String::isNotBlank)?.let { clickImg(it, image.source); true }
-                    ?: oldClickImg(image.source)
-            } else false
+            "2" -> when {
+                ReadBook.book?.isOnLineTxt != true -> image.link?.let(::handleComposeLinkClick) == true
+                debounce -> false
+                else -> action?.let { clickImg(it, image.source); true } ?: oldClickImg(image.source)
+            }
             "3" -> false
             "4" -> if (composeImageDoubleClick) {
-                image.action?.takeIf(String::isNotBlank)?.let { clickImg(it, image.source); true } ?: false
+                action?.let { clickImg(it, image.source); true } ?: false
             } else true
-            else -> if (!debounce) {
-                image.action?.takeIf(String::isNotBlank)?.let { clickImg(it, image.source); true } ?: false
-            } else false
+            else -> when {
+                action == null -> image.link?.let(::handleComposeLinkClick) == true
+                debounce -> false
+                else -> { clickImg(action, image.source); true }
+            }
         }
     }
 
@@ -932,7 +945,10 @@ class ReadBookController(
 
         val previousPage = preview(window.previous)
         val nextPage = preview(window.next)
-        val nextPlusPage = preview(window.nextPlus)
+        val nextPlusPage = preview(window.nextPlus)?.takeUnless { following ->
+            nextPage != null && nextPage.id.chapterIndex != following.id.chapterIndex &&
+                    nextPage.id.chapterIndex in directReaderStreamingChapters
+        }
         val selection = searchSelection
         val aloudPosition = readAloudPosition
         val aloudParagraphIndex = aloudPosition?.let { (chapterIndex, chapterPosition) ->
@@ -957,7 +973,7 @@ class ReadBookController(
                     xor viewModel.pageBatteryPercent.toLong(),
             )
             val pageHasSearchSelection = selection?.chapterIndex == source.id.chapterIndex
-            val pageHasAloudParagraph = aloudPosition?.first == source.id.chapterIndex &&
+            val pageHasAloudParagraph = aloudPosition?.chapterIndex == source.id.chapterIndex &&
                 aloudParagraphIndex != null
             decorated.copy(
                 // Search/read-aloud state must not clone every glyph in the visible window:
@@ -1144,14 +1160,14 @@ class ReadBookController(
      * 作废逐页流出状态：丢掉还没提交的部分页与"仍在排版"标记。已经整章提交的页保留——
      * 重排期间靠它们避免闪"加载中"。
      */
-    private fun clearStreamedReaderChapters(keepChapterIndex: Int? = null) {
-        val dropping = directReaderStreamedPages.filterKeys { it != keepChapterIndex }
+    private fun clearStreamedReaderChapters(keep: (Int) -> Boolean = { false }) {
+        val dropping = directReaderStreamedPages.filterKeys { !keep(it) }
         if (dropping.isNotEmpty()) {
             val partialIds = dropping.values.flatten().mapTo(mutableSetOf()) { it.id }
             replaceDirectReaderPages(directReaderPages.filterNot { it.id in partialIds })
         }
-        directReaderStreamedPages.keys.removeAll { it != keepChapterIndex }
-        directReaderStreamingChapters.removeAll { it != keepChapterIndex }
+        directReaderStreamedPages.keys.removeAll { !keep(it) }
+        directReaderStreamingChapters.removeAll { !keep(it) }
     }
 
     /**
@@ -1195,7 +1211,7 @@ class ReadBookController(
         // 上次切章位置、静读时长不计、邻章预取推迟。
         ReadBook.onComposeManualPageCommitted()
         if (BaseReadAloudService.isRun && ReadBook.onComposeManualPageTurn()) {
-            readAloudPosition = page.id.chapterIndex to chapterPosition
+            readAloudPosition = ReaderVisibleTextPosition(page.id.chapterIndex, chapterPosition)
         }
     }
 
@@ -1306,6 +1322,7 @@ class ReadBookController(
             inputWindow.previous,
             chapter,
             inputWindow.next,
+            inputWindow.nextPlus?.takeIf { it.chapter.index in ReadBook.readerChapterWindowRange },
         ).filterNotNull()
             .distinctBy { it.chapter.index }
             .sortedBy { it.chapter.index }
@@ -1339,6 +1356,7 @@ class ReadBookController(
         }
         val paginationEnvironmentKey = buildString {
             append('|').append(width).append('x').append(height)
+            append('|').append(resolvedPaginationStyle.density)
             append('|').append(contentPadding.left).append(',').append(contentPadding.top)
             append(',').append(contentPadding.right).append(',').append(contentPadding.bottom)
             append('|').append(resolvedPaginationStyle.columnCount(width, height))
@@ -1370,6 +1388,9 @@ class ReadBookController(
             append('|').append(resolvedPaginationStyle.titleBottomSpacingPx)
             append('|').append(resolvedPaginationStyle.paragraphSpacing)
             append('|').append(ReadBookConfig.durConfig.highlightRules.hashCode())
+            // 高亮规则的深浅两套颜色也是排版输入：日夜切换后正文色可能一个字都没变
+            // （用户把两套文字色调成一样），只差这一位才能让旧页作废、按新那套颜色重排。
+            append('|').append(highlightColorMode())
         }
         val key = "$chapterLayoutIdentity,$paginationEnvironmentKey"
         if (directReaderLayoutKey == key && directReaderPages.isNotEmpty()) {
@@ -1437,13 +1458,16 @@ class ReadBookController(
             // 再等新批次从头排完才重新出现。旧 View 就是增量语义：`TextChapterLayout
             // .onPageCompleted` 把成型的页 `textPages.add(...)`，`TextChapter.isLayoutRunning`
             // 只区分"还在排"与"排废了"，前者继续用已排出的页。
-            clearStreamedReaderChapters(
-                keepChapterIndex = ReaderPartialPagePolicy.retainedStreamedChapter(
-                    chapterIndex = chapter.chapter.index,
-                    environmentChanged = environmentChanged,
-                    streamedChapters = directReaderStreamedPages.keys,
-                )
+            val retainedCurrentChapter = ReaderPartialPagePolicy.retainedStreamedChapter(
+                chapterIndex = chapter.chapter.index,
+                environmentChanged = environmentChanged,
+                streamedChapters = directReaderStreamedPages.keys,
             )
+            val retainedLookahead = if (!environmentChanged && ReadBook.readerForwardChapterCount == 2) {
+                (chapter.chapter.index + 1)..(chapter.chapter.index + 2)
+            } else IntRange.EMPTY
+            // 保留滚动预排已成型的页，避免邻章升入可见窗口时又退回占位。
+            clearStreamedReaderChapters { it == retainedCurrentChapter || it in retainedLookahead }
             // 换章不重启窗口内的章：新当前章往往正是此前作为邻章启动的那个任务，
             // 旧 View 的 `ReadBook.loadContent` 同样不会因为当前章切换而取消它。
             ensureReaderChapterPagination(
@@ -1460,7 +1484,7 @@ class ReadBookController(
     }
 
     /**
-     * 保证窗口（`durChapterIndex ± 1`）里的章各自有一个分页任务。
+     * 保证正文输入窗口里的章各自有一个分页任务。
      *
      * 与旧 View 对齐：`ReadBook.loadContent` 只对窗口外的章 `cancelLayout()`，同一章的任务不会
      * 因为"当前章换成了别人"而重启。于是从章 N 翻到 N+1 时，N+1 作为邻章时排好的页直接
@@ -1507,7 +1531,7 @@ class ReadBookController(
 
     /** 回收已经离开窗口的章任务：对照旧 `loadContent` 的 `else -> textChapter.cancelLayout()`。 */
     private fun recycleReaderChapterPaginationJobs() {
-        val visible = ReadBook.durChapterIndex.let { it - 1..it + 1 }
+        val visible = ReadBook.readerChapterWindowRange
         readerChapterPaginationJobs.keys
             .filter { it !in visible }
             .forEach { index ->
@@ -1516,13 +1540,14 @@ class ReadBookController(
                 // （旧 View 对被顶出窗口的章同样先 `cancelLayout()`）。
                 clearStreamedReaderChapter(index)
             }
-        // Like the legacy three-chapter window, bound retained layouts as reading advances.
+        // Bound retained layouts as reading advances.
         // Keep the displayed chapter during a loading handoff even if the session moved ahead.
         val displayedChapter =
             directReaderPageIndex?.let { directReaderPages.getOrNull(it)?.id?.chapterIndex }
         replaceDirectReaderPages(
             ReaderPageNavigator.retainChapterWindow(
                 directReaderPages, ReadBook.durChapterIndex, displayedChapter,
+                forwardChapterCount = ReadBook.readerForwardChapterCount,
             )
         )
         paginatedChapterIdentities.keys.retainAll(visible.toSet())
@@ -1610,11 +1635,14 @@ class ReadBookController(
         padding: ReaderPadding,
         style: ReaderAndroidPaginationStyle,
     ) {
-        val visible = ReadBook.durChapterIndex.let { it - 1..it + 1 }
+        val visible = ReadBook.readerChapterWindowRange
+        val nextChapter = current.chapter.index + 1
         val missing = chapters.filter { candidate ->
             val index = candidate.chapter.index
             index != current.chapter.index &&
                     index in visible &&
+                    (index <= nextChapter || (nextChapter !in directReaderStreamingChapters &&
+                            directReaderPages.any { it.id.chapterIndex == nextChapter && !it.isPlaceholder })) &&
                     (directReaderPages.none { it.id.chapterIndex == index && !it.isPlaceholder } ||
                             index in directReaderStreamingChapters) &&
                     !isReaderChapterPaginationRunning(candidate)
@@ -1644,6 +1672,8 @@ class ReadBookController(
         val environmentKey = directReaderPaginationEnvironmentKey
         val streamGeneration = directReaderStreamGeneration
         val identity = candidate.layoutIdentity()
+        // 在主线程取一次模式再进 IO：任务跑到一半主题切了也不会半章白天色、半章夜间色。
+        val isNightTheme = highlightColorMode()
         readerChapterPaginationJobs.remove(chapterIndex)?.job?.cancel()
         // 旧任务作废：它流出一半的页可能是按旧正文/旧几何排的，必须先撤掉，否则新任务排出的
         // 同 id 页会被"已经存在"挡掉，页表里反而留下旧内容的那几页。
@@ -1680,6 +1710,7 @@ class ReadBookController(
                         contentPaddingBottomPx = padding.bottom,
                         paginationStyle = style,
                         highlightRules = highlightRules,
+                        isNightTheme = isNightTheme,
                         castOptions = io.legado.app.help.readaloud.cast.CastRenderOptions.load(
                             candidate.book.bookUrl,
                             chapterIndex,
@@ -1788,7 +1819,7 @@ class ReadBookController(
             if (directReaderPaginationEnvironmentKey != environmentKey) return@section
             val chapterIndex = chapter.chapter.index
             // 该章已经离开窗口（连续翻页越过了它）：与旧 View 窗口外的 `cancelLayout()` 一致地丢弃。
-            if (chapterIndex !in ReadBook.durChapterIndex - 1..ReadBook.durChapterIndex + 1) {
+            if (chapterIndex !in ReadBook.readerChapterWindowRange) {
                 return@section
             }
             batch.unsupportedChapters.forEach { (index, reason) ->
@@ -2067,7 +2098,15 @@ class ReadBookController(
         activity.lifecycleScope.launch(IO) {
             try {
                 val source = ReadBook.bookSource ?: return@launch
-                val java = SourceLoginJsExtensions(activity, source, BookType.text)
+                val heightPercent = readSettingsGateway.currentSettings.paragraphCommentHeightPercent
+                val java = SourceLoginJsExtensions(
+                    activity, source, BookType.text,
+                    browserHeightPercent = if (heightPercent != 0 && ParagraphBubbleSource.isParagraphComment(src)) {
+                        heightPercent
+                    } else {
+                        0
+                    },
+                )
                 val book = ReadBook.book ?: return@launch
                 val chapter =
                     appDb.bookChapterDao.getChapter(book.bookUrl, ReadBook.durChapterIndex)
@@ -2244,6 +2283,13 @@ class ReadBookController(
             items.add(ActionMenuItem(R.id.menu_edit, activity.getString(R.string.edit)))
             items.add(ActionMenuItem(R.id.menu_ai_clean, activity.getString(R.string.ai_text_clean)))
             items.add(ActionMenuItem(R.id.menu_ai_rewrite, activity.getString(R.string.ai_text_rewrite)))
+            items.add(
+                ActionMenuItem(
+                    R.id.menu_extend_selection,
+                    activity.getString(R.string.extend_selection_to_next_page),
+                    showState = 1,
+                )
+            )
             items.add(ActionMenuItem(R.id.menu_search_content, activity.getString(R.string.search_content)))
             items.add(
                 ActionMenuItem(
@@ -2309,6 +2355,13 @@ class ReadBookController(
         }
     }
 
+    private fun List<ActionMenuItem>.forSelection(includesTitle: Boolean): List<ActionMenuItem> =
+        if (includesTitle) {
+            filterNot { it.id in setOf(R.id.menu_mark, R.id.menu_ai_clean, R.id.menu_ai_rewrite) }
+        } else {
+            this
+        }
+
     fun refreshActionMenuItems() {
         activity.lifecycleScope.launch {
             menuMutex.withLock {
@@ -2316,7 +2369,9 @@ class ReadBookController(
             }
             val menuItems = getActionMenuItems()
             _textMenuState.value?.let { currentState ->
-                _textMenuState.value = currentState.copy(items = menuItems)
+                _textMenuState.value = currentState.copy(
+                    items = menuItems.forSelection(composeSelection?.includesTitle == true)
+                )
             }
         }
     }
@@ -2329,11 +2384,20 @@ class ReadBookController(
                 showState = item.showState
             )
         }
-        viewModel.setTextSelectMenuConfig(GSON.toJson(configs))
-        refreshActionMenuItems()
+        val saveJob = viewModel.setTextSelectMenuConfig(GSON.toJson(configs))
+        activity.lifecycleScope.launch {
+            saveJob.join()
+            refreshActionMenuItems()
+        }
     }
 
     fun onTextMenuItemClick(item: ActionMenuItem) {
+        if (item.id == R.id.menu_extend_selection) {
+            if (_textMenuState.value != null) {
+                composeSelection?.let(_composeSelectionExtensions::tryEmit)
+            }
+            return
+        }
         if (item.intent != null) {
             runCatching {
                 item.intent.putExtra(Intent.EXTRA_PROCESS_TEXT, selectedText)
@@ -2506,7 +2570,10 @@ class ReadBookController(
                 if (effect.relativePosition == 0) viewModel.refreshSeekState()
             }
 
-            is ReadBookEffect.UpPageAnim -> publishReaderPageWindow()
+            is ReadBookEffect.UpPageAnim -> {
+                ReadBook.prefetchEpubScrollLookahead()
+                publishReaderPageWindow()
+            }
             is ReadBookEffect.UpTime, is ReadBookEffect.UpBattery -> {
                 // 时间/电量是烘进页眉页脚 decoration 的动态信息（`directReaderWindow` 里现建），
                 // 必须重发窗口才会刷新；页表还没落地（装载期整窗占位）时也要强制重建。
@@ -2644,7 +2711,7 @@ class ReadBookController(
             is ReadBookEffect.DownloadChapters -> {
                 ReadBook.book?.let { book ->
                     activity.lifecycleScope.launch {
-                        CacheBook.start(activity, book, effect.start, effect.end)
+                        CacheBook.start(activity, book, effect.indices)
                     }
                 }
             }
@@ -2701,13 +2768,16 @@ class ReadBookController(
         }
     }
 
-    fun updateReadAloudProgress(chapterStart: Int) {
-        if (!ReadBook.isCurrentBookReadAloud || !BaseReadAloudService.isPlay()) return
+    fun updateReadAloudProgress(progress: ReadAloudProgress) {
+        val current = ReadAloud.bookSession.state.value
+        if (ReadBook.book?.bookUrl != progress.bookUrl || !BaseReadAloudService.isPlay() ||
+            !progress.matches(current.book?.bookUrl, current.chapterIndex, current.generation)
+        ) return
+        val anchor = ReaderVisibleTextPosition(progress.chapterIndex, progress.chapterPosition)
         // 只更新朗读高亮锚点。可见页的移动由朗读服务驱动（moveToReadAloudPage →
         // moveToNextPage → upContent）与用户导航负责；这里若再按朗读位置 locate
         // 回迁可见页，进入阅读器时会把页面先拉回朗读所在的上一段（跨页段落的
         // locate 落在段落起始页），随后 curPageChanged 的跟随重启又跳回当前页。
-        val anchor = BaseReadAloudService.currentChapterIndex to chapterStart
         if (readAloudPosition == anchor) return
         readAloudPosition = anchor
         // 高亮在窗口发布时才计算绘制（directReaderWindow），锚点变化后必须重发布
@@ -2900,7 +2970,10 @@ class ReadBookController(
      * 返回翻页后发布的页窗口（同步）；null 表示翻页被拒绝（边界/无内容）。
      * 滚动模式依赖这个同步返回在跨页帧内完成窗口替换与偏移折算，不走 StateFlow 往返。
      */
-    fun completeComposePageTurn(direction: PageDirection): ReaderPageWindow? {
+    fun completeComposePageTurn(
+        direction: PageDirection,
+        selectionTarget: ReaderPageId? = null,
+    ): ReaderPageWindow? {
         if (directReaderPages.isEmpty()) return null
         val currentIndex = directReaderPageIndex ?: 0
         val delta = when (direction) {
@@ -2911,6 +2984,12 @@ class ReadBookController(
         val navigation = ReaderPageNavigator.move(directReaderPages, currentIndex, delta)
         if (delta == 0) return null
         val fromChapterIndex = directReaderPages[currentIndex].id.chapterIndex
+        if (selectionTarget != null) {
+            val target = navigation.window.current
+            if (navigation.hitBoundary || target?.id != selectionTarget ||
+                target.isPlaceholder || selectionTarget.chapterIndex != fromChapterIndex
+            ) return null
+        }
         // 部分排版章节的护栏：本章还有没成型的页，窗口里的"下一页"其实已经是下一章，
         // 翻过去会跳过本章剩余内容（旧 `isLastIndexCurrent` 拒绝）；倒退进还没排完的
         // 上一章同理（旧 `moveToPrev` 的 `prevChapter.isCompleted == false`）。
@@ -3388,7 +3467,7 @@ data class TextMenuState(
     val startBottomY: Int,
     val endX: Int,
     val endBottomY: Int,
-    val items: List<ActionMenuItem>
+    val items: List<ActionMenuItem>,
 )
 
 data class ActionMenuItem(
@@ -3418,6 +3497,7 @@ data class ActionMenuItem(
                 R.id.menu_edit -> "menu_edit"
                 R.id.menu_ai_clean -> "menu_ai_clean"
                 R.id.menu_ai_rewrite -> "menu_ai_rewrite"
+                R.id.menu_extend_selection -> "menu_extend_selection"
                 R.id.menu_search_content -> "menu_search_content"
                 R.id.menu_insert_bgm_before -> "menu_insert_bgm_before"
                 R.id.menu_insert_bgm_after -> "menu_insert_bgm_after"

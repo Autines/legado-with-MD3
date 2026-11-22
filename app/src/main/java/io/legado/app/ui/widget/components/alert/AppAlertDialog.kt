@@ -265,22 +265,29 @@ fun AppAlertDialog(
             // COUI 弹窗只有材质形态；AppTheme 在 COUI 引擎下必定提供页面背景源。
             val useMaterial = windowBackdrop != null && CouiDialogDefaults.isMaterialSupported()
             val dark = CouiTheme.isDark
+            val confirmAction = onConfirm?.let {
+                CouiDialogAction(
+                    text = confirmText,
+                    onClick = it,
+                    enabled = confirmEnabled,
+                    style = CouiDialogActionStyle.Primary,
+                    colors = CouiDialogDefaults.primaryActionColors(CouiTheme.colorScheme.accent),
+                )
+            }
+            val dismissAction = onDismiss?.let { CouiDialogAction(text = dismissText, onClick = it) }
+            // 当前 COUI 的 Dialog 要求 confirmAction 非空（上游 pin 的可空版本已被 force-push 丢失）。
+            // 没有确认按钮时把关闭按钮提升为唯一按钮，保持「单按钮信息弹窗」的表现。
+            val resolvedConfirmAction = confirmAction
+                ?: dismissAction
+                ?: CouiDialogAction(text = dismissText, onClick = onDismissRequest)
             CouiDialog(
                 modifier = modifier,
                 onDismissRequest = onDismissRequest,
                 title = title,
                 message = text,
                 dark = dark,
-                confirmAction = onConfirm?.let {
-                    CouiDialogAction(
-                        text = confirmText,
-                        onClick = it,
-                        enabled = confirmEnabled,
-                        style = CouiDialogActionStyle.Primary,
-                        colors = CouiDialogDefaults.primaryActionColors(CouiTheme.colorScheme.accent),
-                    )
-                },
-                dismissAction = onDismiss?.let { CouiDialogAction(text = dismissText, onClick = it) },
+                confirmAction = resolvedConfirmAction,
+                dismissAction = if (confirmAction != null) dismissAction else null,
                 placement = CouiDialogPlacement.Bottom,
                 material = if (useMaterial) CouiDialogDefaults.material(dark) else null,
                 backdrop = windowBackdrop.takeIf { useMaterial },
